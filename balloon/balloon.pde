@@ -22,6 +22,7 @@ And many more...
 #include <Streaming.h>
 #include <NewSoftSerial.h>
 #include <Wire.h>
+#include <WString.h>
 
 byte led_state = 0;
 
@@ -31,8 +32,8 @@ int heading = 0;
 
 // USB WEATHER
 char weather[100];
-const int WEATHER_RX = 9;
-const int WEATHER_TX = 8;
+const int WEATHER_RX = 3;
+const int WEATHER_TX = 2;
 NewSoftSerial weather_serial(WEATHER_RX, WEATHER_TX);
 
 // GPS
@@ -213,7 +214,7 @@ double getLong(void) {
 // Converts UTC time to the correct timezone
 void convertTime(int *time) {
   // How many hours off GMT are we?
-  float offset = 10.5;
+  float offset = 6;
   long sectime = ((long)(time[0]) * 3600) + (time[1] * 60) + time[2];
   sectime += (offset * 3600.0);
   // Did we wrap around?
@@ -284,27 +285,28 @@ void set_weather() {
   int i = 0;
   int stop = 0;
   int started = 0;
-  byte retries = 0;
-  while (retries < 20) {
+  int retries = 0;
+  while (retries < 350) { // 200 * 5ms = 1s = worst case to get first bit from weather board, plus 10 in case we were in the middle of a reading
     if (weather_serial.available() > 0) {
       weather[i] = weather_serial.read();
       if('#' == weather[i]) {
         i = 0;
+        weather[0] = '#';
         started = 1;
       }
       if(started && '$' == weather[i]) {
-        //weather[i] = '\0';
+        weather[i+1] = '\0';
         return;
       }
       i++;
     } else {
-      Serial << "broke" << endl;
-      delay(10);
+      delay(3); // TODO: why this number?
       started = 0;
       i = 0;
       retries++;
     }
   }
+  //Serial << "broke" << endl; // This means we have waited a full second and nothing :(
   return;
 }
 
@@ -316,12 +318,20 @@ int get_heading() {
   Wire.endTransmission(); 
   delay(2); 
   Wire.requestFrom(compass, 6); 
-  int i = 0; 
-  while(Wire.available() && i < 6) { 
-    headingData[i] = Wire.receive(); 
-    i++; 
-  } 
-  return (headingData[0]*256 + headingData[1])/10; 
+  int i = 0;
+  int retries = 0;
+  while(retries < 10) {
+    if(Wire.available()) {
+      while(i < 6) { 
+        headingData[i] = Wire.receive(); 
+        i++; 
+      } 
+      return (headingData[0]*256 + headingData[1])/10; 
+    } else {
+      retries ++;
+    }
+  }
+  return -1;
 }
 
 // BLINKY FUNCTIONS AND OTHER HELPERS
@@ -368,18 +378,25 @@ void loop() {
   // NOT PRODUCTION CODE, OBVIOUSLY
   
   // Set everything for this time around the loop
-  //set_weather();
-  //heading = get_heading();
-  while (!getNMEA("$GPGGA")) { ; }
+  set_weather();
+  heading = get_heading();
   
-  Serial << getLat() << ", " << getLong() << ", " << getAlt() << endl;
-  // process data and go to the loop
-  blink();
-  rtty_txstring("weather");
+  if('#' == weather[0])
+    Serial << weather << " - " << heading << endl;
+  else
+    Serial << "broken";
 
-  //Serial.println(heading);
+  //while (!getNMEA("$GPGGA")) { ; }
+  
+  //Serial << getLat() << ", " << getLong() << ", " << getAlt() << endl;
+  // process data and go to the loop
+  
+  delay(100);
+  rtty_txstring("weather");
+  delay(100);
+
   blink();
-  delay(1000);
+  delay(800);
 
 }
 
