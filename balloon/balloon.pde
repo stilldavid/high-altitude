@@ -22,7 +22,6 @@ And many more...
 #include <Streaming.h>
 #include <NewSoftSerial.h>
 #include <Wire.h>
-#include <WString.h>
 
 byte led_state = 0;
 
@@ -47,6 +46,7 @@ NewSoftSerial gps_serial(GPS_RX, GPS_TX);
 #define RADIO_SPACE 10
 #define RADIO_MARK  11
 #define ASCII_BIT 8
+NewSoftSerial dummy_serial = NewSoftSerial(255, 255);
 
 /***********************************
 ************************************
@@ -244,6 +244,7 @@ void getTime(int *time) {
 
 // RADIO
 void rtty_txstring (char * string) {
+  dummy_serial.read();
   char c;
   c = *string++;
   while ( c != '\0') {
@@ -256,7 +257,7 @@ void rtty_txbyte (char c) {
   int i;
   rtty_txbit (0); // Start bit
   // Send bits for for char LSB first	
-  for (i=0;i<ASCII_BIT;i++) {
+  for (i=0; i<ASCII_BIT; i++) {
     if (c & 1) 
       rtty_txbit(1); 
     else
@@ -270,11 +271,11 @@ void rtty_txbit (int bit) {
   if (bit) {
     digitalWrite(RADIO_SPACE, LOW);
     digitalWrite(RADIO_MARK,  HIGH);
-  } else  {    
+  } else {    
     digitalWrite(RADIO_SPACE, HIGH);
     digitalWrite(RADIO_MARK,  LOW);
   }
-  // This works out to a baud rate of 50 bps
+  // This works out to a baud rate of 50 bps. Somehow.
   delay(19);
   delayMicroseconds(250);
 }
@@ -282,11 +283,13 @@ void rtty_txbit (int bit) {
 // WEATHER BOARD
 // read until we have a full sentence
 void set_weather() {
+  weather_serial.read();
+  delay(1000); // needs this long to buffer a whole sentence
   int i = 0;
   int stop = 0;
   int started = 0;
   int retries = 0;
-  while (retries < 350) { // 200 * 5ms = 1s = worst case to get first bit from weather board, plus 10 in case we were in the middle of a reading
+  while (retries < 1300) { // wait at most 1.3 seconds for a valid reading (in case we were in the middle of one)
     if (weather_serial.available() > 0) {
       weather[i] = weather_serial.read();
       if('#' == weather[i]) {
@@ -294,19 +297,21 @@ void set_weather() {
         weather[0] = '#';
         started = 1;
       }
-      if(started && '$' == weather[i]) {
-        weather[i+1] = '\0';
-        return;
+      if('$' == weather[i]) {
+        if(started) {
+          weather[i+1] = '\0';
+          return;
+        } else {
+          i = 0; // $ but not started yet
+        }
       }
       i++;
     } else {
-      delay(3); // TODO: why this number?
-      started = 0;
+      delay(1);
       i = 0;
       retries++;
     }
   }
-  //Serial << "broke" << endl; // This means we have waited a full second and nothing :(
   return;
 }
 
@@ -377,14 +382,13 @@ void loop() {
   // This is a play area for right now.
   // NOT PRODUCTION CODE, OBVIOUSLY
   
-  // Set everything for this time around the loop
   set_weather();
   heading = get_heading();
   
-  if('#' == weather[0])
+  if('#' == weather[0]) // not the checksum I'd like to see from the weather board...
     Serial << weather << " - " << heading << endl;
   else
-    Serial << "broken";
+    Serial << weather << " - bad" << endl;
 
   //while (!getNMEA("$GPGGA")) { ; }
   
@@ -392,11 +396,11 @@ void loop() {
   // process data and go to the loop
   
   delay(100);
-  rtty_txstring("weather");
+  rtty_txstring("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
   delay(100);
 
   blink();
-  delay(800);
+  delay(1200);
 
 }
 
