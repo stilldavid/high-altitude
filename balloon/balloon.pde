@@ -22,8 +22,14 @@ And many more...
 #include <Streaming.h>
 #include <NewSoftSerial.h>
 #include <Wire.h>
+#include <stdio.h>
+#include <stdint.h>
+#include <string.h>
+
 
 byte led_state = 0;
+unsigned int count = 0;
+char s[100] = "0";
 
 // COMPASS
 const int compass = (0x32 >> 1); 
@@ -41,6 +47,17 @@ const int GPS_TX = 7;
 #define BUFFERSIZE 1000
 char buffer[1000];
 NewSoftSerial gps_serial(GPS_RX, GPS_TX);
+typedef struct {
+  double lat;
+  double lon;
+  char* lat_s;
+  char* lon_s;
+  int time;
+  int fixtype;
+  int speed;
+  int alt;
+  int sats;
+} gps;
 
 // RADIO
 #define RADIO_SPACE 10
@@ -361,6 +378,20 @@ int atoh(char c) {
     return c - 48;
 }
 
+char *ftoa(char *a, double f, int precision) {
+  long p[] = {0,10,100,1000,10000,100000,1000000,10000000,100000000};
+  
+  char *ret = a;
+  int heiltal = (int)f;
+  itoa(heiltal, a, 10);
+  while (*a != '\0') a++;
+  *a++ = '.';
+  int desimal = abs((int)((f - heiltal) * p[precision]));
+  itoa(desimal, a, 10);
+  return ret;
+}
+
+
 
 /***********************************
 ************************************
@@ -369,7 +400,7 @@ int atoh(char c) {
 void setup() {
   pinMode(RADIO_SPACE, OUTPUT);
   pinMode(RADIO_MARK, OUTPUT);
-  
+    
   weather_serial.begin(9600);
   gps_serial.begin(4800);
   Serial.begin(9600); // This is for debugging and the openLog
@@ -378,29 +409,41 @@ void setup() {
 }
 
 void loop() {
-  
-  // This is a play area for right now.
-  // NOT PRODUCTION CODE, OBVIOUSLY
-  
+  gps g;
+  char huh[12] = "\0";
+  char wow[12] = "\0";
+    
+  // Set all our variables
   set_weather();
   heading = get_heading();
+  while (!getNMEA("$GPGGA")) { ; }
   
+  g.lat = getLat();
+  g.lon = getLong();
+  g.lat_s = ftoa(huh, g.lat, 100);
+  g.lon_s = ftoa(wow, g.lon, 100);
+  g.alt = getAlt();
+  g.speed = getSpeed();
+  getTime(&g.time);
+  
+  // print to Serial (the OpenLog)
+  Serial << g.time << "," << g.lat << "," << g.lon << "," << g.alt << endl;
   if('#' == weather[0]) // not the checksum I'd like to see from the weather board...
     Serial << weather << " - " << heading << endl;
   else
     Serial << weather << " - bad" << endl;
-
-  //while (!getNMEA("$GPGGA")) { ; }
+    
+  // transmit the data
+  snprintf(s, sizeof(s), "$%i,%s,%s,%s,%s\n", count, g.lat_s, g.lon_s, huh, wow);
   
-  //Serial << getLat() << ", " << getLong() << ", " << getAlt() << endl;
-  // process data and go to the loop
-  
-  delay(100);
-  rtty_txstring("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
-  delay(100);
+  while(1) {
+    rtty_txstring("A");
+    rtty_txstring("B");
+  }
+  rtty_txstring(s);
 
   blink();
-  delay(1200);
+  count++;
 
 }
 
