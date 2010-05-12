@@ -50,8 +50,8 @@ char buffer[1000];
 NewSoftSerial gps_serial(GPS_RX, GPS_TX);
 TinyGPS gps;
 typedef struct {
-  long lat, lon;
-  unsigned long fix_age, time, date, speed, course, alt;
+  long lat, lon, alt;
+  unsigned long fix_age, time, date, speed, course;
   unsigned long chars;
   unsigned short sentences, failed_checksum;
 } gpsd;
@@ -100,6 +100,7 @@ void rtty_txbyte (char c) {
     c = c >> 1;
   }
   rtty_txbit (1); // Stop bit
+  rtty_txbit (1); // Stop bit 2
 }
 
 void rtty_txbit (int bit) {
@@ -209,6 +210,18 @@ char *ftoa(char *a, double f, int precision) {
   return ret;
 }
 
+uint8_t xor_checksum(char *string) {
+	size_t i;
+	uint8_t XOR;
+	uint8_t c;
+	XOR = 0;
+	// Calculate checksum ignoring the first two $s
+	for (i = 2; i < strlen(string); i++) {
+		c = string[i];
+		XOR ^= c;
+	}
+	return XOR;
+}
 
 
 /***********************************
@@ -228,6 +241,7 @@ void setup() {
 
 void loop() {
   bool fed = false;
+  char checksum[10];
     
   // Set all our variables
   set_weather();
@@ -248,19 +262,20 @@ void loop() {
   g.course = gps.course();
   
   g.alt = gps.altitude();
-    
-  // print to Serial (the OpenLog)
-  Serial << g.time << "," << g.lat << "," << g.lon << "," << g.alt << endl;
-  if('#' == weather[0]) // not the checksum I'd like to see from the weather board...
-    Serial << weather << " - " << heading << endl;
-  else
-    Serial << weather << " - bad" << endl;
-    
+  
   // transmit the data
-  snprintf(s, sizeof(s), "$%i,%lu,%l,%l\n", count, g.time, g.lat, g.lon);
+  snprintf(s, sizeof(s), "$$KI6YMZ,%i,%lu,%li,%li,%li,%lu,%lu", count, g.time, g.lat, g.lon, g.alt, g.speed, g.course);
+  snprintf(checksum, sizeof(checksum), "*%04X\n", xor_checksum(s));
+	memcpy(s + strlen(s), checksum, strlen(checksum) + 1);
   
   rtty_txstring(s);
-
+  
+  // print to Serial (the OpenLog)
+  if('#' == weather[0]) // not the checksum I'd like to see from the weather board...
+    Serial << s << weather << "," << heading << endl;
+  else
+    Serial << weather << "," << heading << " - bad" << endl;
+  
   blink();
   count++;
 
