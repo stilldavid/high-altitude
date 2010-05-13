@@ -336,9 +336,7 @@ void loop() {
   g.course = gps.course();
   
   g.alt = gps.altitude();
-  
-  Serial << g.alt << endl;
-      
+        
   // transmit the data
   snprintf(s, sizeof(s), "$$KI6YMZ,%i,%lu,%li,%li,%li,%lu,%lu,%i", count, g.time, g.lat, g.lon, g.alt, g.speed, g.course, outside_temp);
   snprintf(checksum, sizeof(checksum), "*%04X\n", xor_checksum(s));
