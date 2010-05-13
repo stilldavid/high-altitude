@@ -21,6 +21,7 @@ And many more...
 
 #include <Streaming.h>
 #include <NewSoftSerial.h>
+#include <OneWire.h>
 #include <Wire.h>
 #include <TinyGPS.h>
 #include <stdio.h>
@@ -63,6 +64,11 @@ gpsd g; // instantiate above struct
 #define RADIO_MARK  11
 #define ASCII_BIT 8
 NewSoftSerial dummy_serial = NewSoftSerial(255, 255);
+
+// TEMPERATURE DS18S20
+#define TEMP_PIN 12
+OneWire ds(TEMP_PIN);
+int outside_temp = 0;
 
 /***********************************
 ************************************
@@ -175,6 +181,73 @@ int get_heading() {
   return -1;
 }
 
+// TEMPERATURE
+int get_temp() {
+  int HighByte, LowByte, TReading, SignBit, Tc_100, Whole;
+
+  OneWireReset(TEMP_PIN);
+  OneWireOutByte(TEMP_PIN, 0xcc);
+  OneWireOutByte(TEMP_PIN, 0x44); // perform temperature conversion, strong pullup for one sec
+
+  OneWireReset(TEMP_PIN);
+  OneWireOutByte(TEMP_PIN, 0xcc);
+  OneWireOutByte(TEMP_PIN, 0xbe);
+
+  LowByte = OneWireInByte(TEMP_PIN);
+  HighByte = OneWireInByte(TEMP_PIN);
+  TReading = (HighByte << 8) + LowByte;
+  SignBit = TReading & 0x8000;  // test most sig bit
+  if (SignBit) { // Negative
+    TReading = (TReading ^ 0xffff) + 1; // 2's comp
+  }
+  Tc_100 = (6 * TReading) + TReading / 4;    // multiply by (100 * 0.0625) or 6.25
+
+  Whole = Tc_100;
+  return Whole;
+}
+
+void OneWireReset(int Pin) {// reset.  Should improve to act as a presence pulse
+  digitalWrite(Pin, LOW);
+  pinMode(Pin, OUTPUT); // bring low for 500 us
+  delayMicroseconds(500);
+  pinMode(Pin, INPUT);
+  delayMicroseconds(500);
+}
+
+void OneWireOutByte(int Pin, byte d) { // output byte d (least sig bit first).
+  byte n;
+  for(n=8; n!=0; n--) {
+    if ((d & 0x01) == 1) {  // test least sig bit
+      digitalWrite(Pin, LOW);
+      pinMode(Pin, OUTPUT);
+      delayMicroseconds(5);
+      pinMode(Pin, INPUT);
+      delayMicroseconds(60);
+    } else {
+      digitalWrite(Pin, LOW);
+      pinMode(Pin, OUTPUT);
+      delayMicroseconds(60);
+      pinMode(Pin, INPUT);
+    }
+    d=d>>1; // now the next bit is in the least sig bit position.
+  }
+}
+
+byte OneWireInByte(int Pin) { // read byte, least sig byte first
+  byte d, n, b;
+  for (n=0; n<8; n++) {
+    digitalWrite(Pin, LOW);
+    pinMode(Pin, OUTPUT);
+    delayMicroseconds(5);
+    pinMode(Pin, INPUT);
+    delayMicroseconds(5);
+    b = digitalRead(Pin);
+    delayMicroseconds(50);
+    d = (d >> 1) | (b<<7); // shift d to right and insert b in most sig bit position
+  }
+  return(d);
+}
+
 // BLINKY FUNCTIONS AND OTHER HELPERS
 void blink() {
   digitalWrite(13, HIGH);
@@ -245,6 +318,7 @@ void loop() {
     
   // Set all our variables
   set_weather();
+  outside_temp = get_temp();
   heading = get_heading();
   while(!fed)
     fed = feedgps();
@@ -263,8 +337,10 @@ void loop() {
   
   g.alt = gps.altitude();
   
+  Serial << g.alt << endl;
+      
   // transmit the data
-  snprintf(s, sizeof(s), "$$KI6YMZ,%i,%lu,%li,%li,%li,%lu,%lu", count, g.time, g.lat, g.lon, g.alt, g.speed, g.course);
+  snprintf(s, sizeof(s), "$$KI6YMZ,%i,%lu,%li,%li,%li,%lu,%lu,%i", count, g.time, g.lat, g.lon, g.alt, g.speed, g.course, outside_temp);
   snprintf(checksum, sizeof(checksum), "*%04X\n", xor_checksum(s));
 	memcpy(s + strlen(s), checksum, strlen(checksum) + 1);
   
