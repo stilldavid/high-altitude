@@ -33,16 +33,6 @@ byte led_state = 0;
 unsigned int count = 0;
 char s[100] = "0";
 
-// COMPASS
-const int compass = (0x32 >> 1);
-int heading = 0;
-
-// USB WEATHER
-char weather[100];
-const int WEATHER_RX = 3;
-const int WEATHER_TX = 2;
-NewSoftSerial weather_serial(WEATHER_RX, WEATHER_TX);
-
 // GPS
 const int GPS_RX = 6;
 const int GPS_TX = 7;
@@ -69,6 +59,9 @@ NewSoftSerial dummy_serial = NewSoftSerial(255, 255);
 #define TEMP_PIN 12
 OneWire ds(TEMP_PIN);
 int outside_temp = 0;
+
+// uBlox nav mode
+uint8_t setNav[] = {0xB5, 0x62, 0x06, 0x24, 0x24, 0x00, 0xFF, 0xFF, 0x06, 0x03, 0x00, 0x00, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 0x05, 0x00, 0xFA, 0x00, 0xFA, 0x00, 0x64, 0x00, 0x2C, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x16, 0xDC};
 
 /***********************************
 ************************************
@@ -120,65 +113,6 @@ void rtty_txbit (int bit) {
   // This works out to a baud rate of 50 bps. Somehow.
   delay(19);
   delayMicroseconds(250);
-}
-
-// WEATHER BOARD
-// read until we have a full sentence
-void set_weather() {
-  weather_serial.read();
-  delay(1000); // needs this long to buffer a whole sentence
-  int i = 0;
-  int stop = 0;
-  int started = 0;
-  int retries = 0;
-  while (retries < 1300) { // wait at most 1.3 seconds for a valid reading (in case we were in the middle of one)
-    if (weather_serial.available() > 0) {
-      weather[i] = weather_serial.read();
-      if('#' == weather[i]) {
-        i = 0;
-        weather[0] = '#';
-        started = 1;
-      }
-      if('$' == weather[i]) {
-        if(started) {
-          weather[i+1] = '\0';
-          return;
-        } else {
-          i = 0; // $ but not started yet
-        }
-      }
-      i++;
-    } else {
-      delay(1);
-      i = 0;
-      retries++;
-    }
-  }
-  return;
-}
-
-// COMPASS
-int get_heading() {
-  byte headingData[6];
-  Wire.beginTransmission(compass);
-  Wire.send(0x50);
-  Wire.endTransmission();
-  delay(2);
-  Wire.requestFrom(compass, 6);
-  int i = 0;
-  int retries = 0;
-  while(retries < 10) {
-    if(Wire.available()) {
-      while(i < 6) {
-        headingData[i] = Wire.receive();
-        i++;
-      }
-      return (headingData[0]*256 + headingData[1])/10;
-    } else {
-      retries ++;
-    }
-  }
-  return -1;
 }
 
 // TEMPERATURE
@@ -256,31 +190,8 @@ void blink() {
 }
 
 void toggle() {
-  digitalWrite(13, led_state); 
+  digitalWrite(13, led_state);
   led_state = !led_state;
-}
-
-// Converts a HEX string to an int
-int atoh(char c) {
-  if (c >= 'A' && c <= 'F')
-    return c - 55;
-  else if (c >= 'a' && c <= 'f')
-    return c - 87;
-  else
-    return c - 48;
-}
-
-char *ftoa(char *a, double f, int precision) {
-  long p[] = {0,10,100,1000,10000,100000,1000000,10000000,100000000};
-
-  char *ret = a;
-  int heiltal = (int)f;
-  itoa(heiltal, a, 10);
-  while (*a != '\0') a++;
-  *a++ = '.';
-  int desimal = abs((int)((f - heiltal) * p[precision]));
-  itoa(desimal, a, 10);
-  return ret;
 }
 
 uint8_t xor_checksum(char *string) {
@@ -296,6 +207,60 @@ uint8_t xor_checksum(char *string) {
   return XOR;
 }
 
+
+// Send a byte array of UBX protocol to the GPS
+void sendUBX(uint8_t *MSG, uint8_t len) {
+  for(int i=0; i<len; i++) {
+    Serial.print(MSG[i], BYTE);
+  }
+  Serial.println();
+}
+
+// Get the current NAV5 mode
+int getUBXNAV5() {
+
+  uint8_t b;
+  uint8_t byteID = 0;
+  int startTime = millis();
+
+  // Poll/query message
+  uint8_t getNAV5[] = { 0xB5, 0x62, 0x06, 0x24, 0x00, 0x00, 0x2A, 0x84 };
+
+  // First few bytes of the poll response
+  uint8_t response[] = { 0xB5, 0x62, 0x06, 0x24, 0x24, 0x00, 0xFF, 0xFF};
+
+  // Interrogate Mr GPS...
+  sendUBX(getNAV5, sizeof(getNAV5)/sizeof(uint8_t));
+
+  // Process his response...
+  while (1) {
+
+    // Timeout if no valid response in 3 seconds
+    if (millis() - startTime > 3000) {
+      return -1;
+    }
+
+    // Make sure data is available to read
+    if (Serial.available()) {
+      b = Serial.read();
+
+      // 8th byte is the nav mode
+      if (byteID == 8) {
+        return b;
+      } 
+      // Make sure the response matches the expected preamble
+      else if (b == response[byteID]) {
+        byteID++;
+      } else {
+        byteID = 0; // Reset and look again, invalid order
+      }
+
+    }
+  }
+
+}
+
+
 /***********************************
 ************************************
 ***********************************/
@@ -304,9 +269,29 @@ void setup() {
   pinMode(RADIO_SPACE, OUTPUT);
   pinMode(RADIO_MARK, OUTPUT);
 
-  weather_serial.begin(9600);
   gps_serial.begin(4800);
+
+  //Turning off all GPS NMEA strings apart from GPGGA on the uBlox modules
+  gps_serial.print("$PUBX,40,GLL,0,0,0,0*5C\r\n");
+  gps_serial.print("$PUBX,40,ZDA,0,0,0,0*44\r\n");
+  gps_serial.print("$PUBX,40,VTG,0,0,0,0*5E\r\n");
+  gps_serial.print("$PUBX,40,GSV,0,0,0,0*59\r\n");
+  gps_serial.print("$PUBX,40,GSA,0,0,0,0*4E\r\n");
+  delay(2000);
+  // Set the navigation mode (Airborne, 1G)
+  rtty_txstring("Setting uBlox nav mode: ");
+  sendUBX(setNav, sizeof(setNav)/sizeof(uint8_t));
+  delay(100);
+  if(getUBXNAV5() != 6) {
+    sendUBX(setNav, sizeof(setNav)/sizeof(uint8_t));
+    rtty_txstring("Resending UBX Command");
+  }
+  else {
+    rtty_txstring("Ublox in Airborne Mode");
+  }
+
   Serial.begin(9600); // This is for debugging and the openLog
+  Serial.println("setting up...");
   Wire.begin();
   delay(3000); // artificial delay to wait for openLog
 }
@@ -316,9 +301,7 @@ void loop() {
   char checksum[10];
 
   // Set all our variables
-  set_weather();
   outside_temp = get_temp();
-  heading = get_heading();
   while(!fed)
     fed = feedgps();
 
@@ -338,21 +321,15 @@ void loop() {
 
   // transmit the data
   snprintf(s, sizeof(s), "$$KI6YMZ,%i,%lu,%li,%li,%li,%lu,%lu,%i", count, g.time, g.lat, g.lon, g.alt, g.speed, g.course, outside_temp);
-  snprintf(checksum, sizeof(checksum), "*%04X\n", xor_checksum(s));
+  snprintf(checksum, sizeof(checksum), "*%02X\n", xor_checksum(s));
   memcpy(s + strlen(s), checksum, strlen(checksum) + 1);
 
   rtty_txstring(s);
 
-  // print to Serial (the OpenLog)
-  if('#' == weather[0]) // not the checksum I'd like to see from the weather board...
-    Serial << s << weather << "," << heading << endl;
-  else
-    Serial << weather << "," << heading << " - bad" << endl;
+  Serial << s << endl;
 
   blink();
   count++;
 
 }
-
-
 
