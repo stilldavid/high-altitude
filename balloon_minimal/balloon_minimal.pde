@@ -41,18 +41,23 @@ char buffer[1000];
 NewSoftSerial gps_serial(GPS_RX, GPS_TX);
 TinyGPS gps;
 typedef struct {
-  long lat, lon, alt;
-  unsigned long fix_age, time, date, speed, course;
+  float flat, flon, falt;
+  float fkph, fcourse;
+  unsigned long fix_age, time, date;
   unsigned long chars;
   unsigned short sentences, failed_checksum;
 } gpsd;
 gpsd g; // instantiate above struct
+char latbuf[12], lonbuf[12], ialtbuf[10], coursebuf[12], kphbuf[12];
+long int ialt = 123;
 
+int hour, minute, second = 0;
 
 // RADIO
 #define RADIO_SPACE 10
 #define RADIO_MARK  11
 #define ASCII_BIT 8
+#define BAUD_RATE 20150 // 100 baud
 NewSoftSerial dummy_serial = NewSoftSerial(255, 255);
 
 // TEMPERATURE DS18S20
@@ -112,13 +117,14 @@ void rtty_txbit (int bit) {
   if (bit) {
     digitalWrite(RADIO_SPACE, LOW);
     digitalWrite(RADIO_MARK,  HIGH);
+    digitalWrite(13, LOW);
   } else {
     digitalWrite(RADIO_SPACE, HIGH);
     digitalWrite(RADIO_MARK,  LOW);
+    digitalWrite(13, HIGH);
   }
   // This works out to a baud rate of 50 bps. Somehow.
-  delay(19);
-  delayMicroseconds(250);
+  delayMicroseconds(BAUD_RATE);
 }
 
 // TEMPERATURE
@@ -167,13 +173,76 @@ uint8_t xor_checksum(char *string) {
   return XOR;
 }
 
+char* floatToString(char * outstr, double val, byte precision, byte widthp){
+  char temp[16];
+  byte i;
+  // compute the rounding factor and fractional multiplier
+  double roundingFactor = 0.5;
+  unsigned long mult = 1;
+  for (i = 0; i < precision; i++)
+  {
+    roundingFactor /= 10.0;
+    mult *= 10;
+  }
+
+  temp[0]='\0';
+  outstr[0]='\0';
+
+  if(val < 0.0){
+    strcpy(outstr,"-\0");
+    val = -val;
+  }
+
+  val += roundingFactor;
+
+  strcat(outstr, itoa(int(val),temp,10));  //prints the int part
+  if( precision > 0) {
+    strcat(outstr, ".\0"); // print the decimal point
+    unsigned long frac;
+    unsigned long mult = 1;
+    byte padding = precision -1;
+    while(precision--)
+      mult *=10;
+
+    if(val >= 0)
+      frac = (val - int(val)) * mult;
+    else
+      frac = (int(val)- val ) * mult;
+    unsigned long frac1 = frac;
+
+    while(frac1 /= 10)
+      padding--;
+
+    while(padding--)
+      strcat(outstr,"0\0");
+
+    strcat(outstr,itoa(frac,temp,10));
+  }
+
+  // generate space padding
+  if ((widthp != 0)&&(widthp >= strlen(outstr))){
+    byte J=0;
+    J = widthp - strlen(outstr);
+
+    for (i=0; i< J; i++) {
+      temp[i] = ' ';
+    }
+
+    temp[i++] = '\0';
+    strcat(temp,outstr);
+    strcpy(outstr,temp);
+  }
+
+  return outstr;
+}
+
 
 // Send a byte array of UBX protocol to the GPS
 void sendUBX(uint8_t *MSG, uint8_t len) {
   for(int i=0; i<len; i++) {
-    Serial.print(MSG[i], BYTE);
+    gps_serial.print(MSG[i], BYTE);
   }
-  Serial.println();
+  gps_serial.println();
 }
 
 // Get the current NAV5 mode
@@ -201,8 +270,8 @@ int getUBXNAV5() {
     }
 
     // Make sure data is available to read
-    if (Serial.available()) {
-      b = Serial.read();
+    if (gps_serial.available()) {
+      b = gps_serial.read();
 
       // 8th byte is the nav mode
       if (byteID == 8) {
@@ -214,10 +283,8 @@ int getUBXNAV5() {
       } else {
         byteID = 0; // Reset and look again, invalid order
       }
-
     }
   }
-
 }
 
 uint16_t gps_CRC16_checksum (char *string) {
@@ -292,21 +359,38 @@ void loop() {
     fed = feedgps();
 
   // retrieves +/- lat/long in 100000ths of a degree
-  gps.get_position(&g.lat, &g.lon, &g.fix_age);
+  gps.f_get_position(&g.flat, &g.flon);
 
   // time in hhmmsscc, date in ddmmyy
   gps.get_datetime(&g.date, &g.time, &g.fix_age);
+  hour = (g.time / 1000000);
+  minute = ((g.time - (hour * 1000000)) / 10000);
+  second = ((g.time - ((hour * 1000000) + (minute * 10000))));
+  second = second / 100;
 
   // returns speed in 100ths of a knot
-  g.speed = gps.speed();
+  g.fkph = gps.f_speed_kmph();
 
   // course in 100ths of a degree
-  g.course = gps.course();
+  g.fcourse = gps.f_course();
 
-  g.alt = gps.altitude();
+  g.falt = gps.f_altitude();
+
+  // make stuff pretty
+  floatToString(latbuf, g.flat, 4, 0);
+  floatToString(lonbuf, g.flon, 4, 0);
+  floatToString(coursebuf, g.fcourse, 4, 0);
+  floatToString(kphbuf, g.fkph, 4, 0);
+  ialt = long(g.falt);
+
+  if(!upper_ceiling_reached && (ialt > UPPER_CEILING) && (ialt < 50000))
+    upper_ceiling_reached = 1;
+
+  if(upper_ceiling_reached && (ialt < LOWER_CEILING))
+    lower_ceiling_reached = 1;
 
   // transmit the data
-  snprintf(s, sizeof(s), "$$KI6YMZ,%i,%lu,%li,%li,%li,%lu,%lu,%i", count, g.time, g.lat, g.lon, g.alt, g.speed, g.course, outside_temp);
+  snprintf(s, sizeof(s), "$$KI6YMZ,%d,%d:%d:%d,%s,%s,%ld,%s,%s,%i", count, hour, minute, second, latbuf, lonbuf, ialt, kphbuf, coursebuf, outside_temp);
 
   //snprintf(checksum, sizeof(checksum), "*%02X\n", xor_checksum(s));
   snprintf(checksum, sizeof(checksum), "*%04X\n", gps_CRC16_checksum(s));
@@ -316,6 +400,14 @@ void loop() {
   rtty_txstring(s);
 
   Serial << s << endl;
+
+  if(upper_ceiling_reached && lower_ceiling_reached) {
+    beep();
+    beep();
+    beep();
+    beep();
+    beep();
+  }
 
   blink();
   count++;
