@@ -124,7 +124,9 @@ void rtty_txbit (int bit) {
     digitalWrite(13, HIGH);
   }
   // This works out to a baud rate of 50 bps. Somehow.
-  delayMicroseconds(BAUD_RATE);
+  delay(19);
+  delayMicroseconds(250);
+  //delayMicroseconds(BAUD_RATE);
 }
 
 // TEMPERATURE
@@ -316,7 +318,7 @@ void setup() {
 
   beep(); // to show we're started
 
-  gps_serial.begin(4800);
+  gps_serial.begin(9600);
 
   //Turning off all GPS NMEA strings apart from GPGGA on the uBlox modules
   gps_serial.print("$PUBX,40,GLL,0,0,0,0*5C\r\n");
@@ -329,17 +331,16 @@ void setup() {
   rtty_txstring("Setting uBlox nav mode: ");
   sendUBX(setNav, sizeof(setNav)/sizeof(uint8_t));
   delay(100);
-  if(getUBXNAV5() != 6) {
+  while(getUBXNAV5() != 6) {
     sendUBX(setNav, sizeof(setNav)/sizeof(uint8_t));
     rtty_txstring("Resending UBX Command");
   }
-  else {
-    rtty_txstring("Ublox in Airborne Mode");
-  }
+  rtty_txstring("Ublox in Airborne Mode");
 
   Serial.begin(9600); // This is for debugging and the openLog
   Wire.begin();
   delay(3000); // artificial delay to wait for openLog
+  Serial.print("Starting...");
 
   beep();
   beep();
