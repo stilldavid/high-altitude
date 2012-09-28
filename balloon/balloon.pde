@@ -33,6 +33,12 @@ byte led_state = 0;
 unsigned int count = 0;
 char s[100] = "0";
 
+// Servo
+const int SSC_RX = 8;
+const int SSC_TX = 9;
+NewSoftSerial ssc_serial(SSC_RX, SSC_TX);
+int cam_pos = 1;
+
 // COMPASS
 const int compass = (0x32 >> 1);
 int heading = 0;
@@ -77,7 +83,9 @@ int outside_temp = 0;
 // GPS
 bool feedgps() {
   while (gps_serial.available()) {
-    if (gps.encode(gps_serial.read()))
+    char c = gps_serial.read();
+    //Serial << c;
+    if (gps.encode(c))
       return true;
   }
   return false;
@@ -296,6 +304,30 @@ uint8_t xor_checksum(char *string) {
   return XOR;
 }
 
+void put(int servo, int angle)
+{
+
+  unsigned char buff[6];
+
+  unsigned int temp;
+  unsigned char pos_hi, pos_low;
+  
+  temp=angle&0x1f80;
+  pos_hi=temp>>7;
+  pos_low=angle & 0x7f;
+
+  buff[0]=0x80;//start byte
+  buff[1]=0x01;//device id
+  buff[2]=0x04;//command number
+  buff[3]=servo;//servo number
+  buff[4]=pos_hi;//data1
+  buff[5]=pos_low;//data2
+
+  for(int i=0;i<6;i++){
+    ssc_serial.print(buff[i], BYTE);
+  }
+}
+
 /***********************************
 ************************************
 ***********************************/
@@ -304,8 +336,9 @@ void setup() {
   pinMode(RADIO_SPACE, OUTPUT);
   pinMode(RADIO_MARK, OUTPUT);
 
+  ssc_serial.begin(9600);
   weather_serial.begin(9600);
-  gps_serial.begin(4800);
+  gps_serial.begin(9600);
   Serial.begin(9600); // This is for debugging and the openLog
   Wire.begin();
   delay(3000); // artificial delay to wait for openLog
@@ -318,7 +351,9 @@ void loop() {
   // Set all our variables
   set_weather();
   outside_temp = get_temp();
-  heading = get_heading();
+  Serial << outside_temp << endl;
+
+  //heading = get_heading();
   while(!fed)
     fed = feedgps();
 
@@ -340,7 +375,7 @@ void loop() {
   snprintf(s, sizeof(s), "$$KI6YMZ,%i,%lu,%li,%li,%li,%lu,%lu,%i", count, g.time, g.lat, g.lon, g.alt, g.speed, g.course, outside_temp);
   snprintf(checksum, sizeof(checksum), "*%04X\n", xor_checksum(s));
   memcpy(s + strlen(s), checksum, strlen(checksum) + 1);
-
+  
   rtty_txstring(s);
 
   // print to Serial (the OpenLog)
@@ -349,10 +384,23 @@ void loop() {
   else
     Serial << weather << "," << heading << " - bad" << endl;
 
+  // what to do with the servo
+  if (g.alt > 2136600) {
+    put(0, 2820); // this is straight up
+  } else {
+    if(0 == count % 5) { // every 5 counts, toggle servo
+      if(1 == cam_pos) {
+        put(0, 2820); // this is straight up
+        cam_pos = 0;
+      } else {
+        put(0, 4400); // this is sideways
+        cam_pos = 1;
+      }
+    }
+  }
+  
   blink();
   count++;
 
 }
-
-
 
