@@ -84,17 +84,37 @@ void loop(void) {
   bool fed = false;
   unsigned int feeder = 0;
 
+  // give gps time to feed after interrupts off
+  delay(2000);
+
   // feed gps
-  while(!fed && feeder < 1000) {
+  while(!fed)
     fed = feedgps();
-    feeder++;
+
+  // hopefully throw out bad fixes - # of satellites
+  if(gps.satellites() == TinyGPS::GPS_INVALID_SATELLITES || gps.satellites() <= 3) {
+    blink();
+    blink();
+    Serial.print(gps.satellites() == TinyGPS::GPS_INVALID_SATELLITES ? 0 : gps.satellites());
+    Serial.println(" satellites in view");
+    return;
+  }
+
+  // hopefully throw out bad fixes - fix age
+  gps.get_datetime(&g.date, &g.time, &g.fix_age);
+  if(g.fix_age > 10000) {
+    blink();
+    blink();
+    blink();
+    Serial.print(g.fix_age);
+    Serial.println(" millseconds old fix");
+    return;
   }
 
   // retrieves +/- lat/long in 100000ths of a degree
   gps.f_get_position(&g.flat, &g.flon);
 
   // time in hhmmsscc, date in ddmmyy
-  gps.get_datetime(&g.date, &g.time, &g.fix_age);
   hour = (g.time / 1000000);
   minute = ((g.time - (hour * 1000000)) / 10000);
   second = ((g.time - ((hour * 1000000) + (minute * 10000))));
@@ -114,8 +134,6 @@ void loop(void) {
   floatToString(coursebuf, g.fcourse, 1, 0);
   floatToString(kphbuf, g.fkph, 1, 0);
   ialt = long(g.falt);
-
-  Serial.print(gps.satellites() == TinyGPS::GPS_INVALID_SATELLITES ? 0 : gps.satellites());
 
   sensors.requestTemperatures();
 
@@ -138,9 +156,6 @@ void loop(void) {
 
   Serial.println(s);
 
-  // give gps time to feed
-  delay(1500);
-
   // ITERATE!
   count++;
 }
@@ -150,6 +165,13 @@ void loop(void) {
 ************************************
 ***********************************/
 
+
+// BLINKY FUNCTIONS AND OTHER HELPERS
+void blink() {
+  digitalWrite(13, HIGH);
+  delay(100);
+  digitalWrite(13, LOW);
+}
 
 // GPS
 bool feedgps() {
